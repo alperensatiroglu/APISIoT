@@ -3,6 +3,21 @@
 #include <MFRC522.h>
 #include <Servo.h>
 #include <TimeLib.h>
+#include <Firebase_ESP_Client.h>
+#include "addons/TokenHelper.h" //!
+#include "ESP8266WiFi.h"
+#define API_KEY "AIzaSyAGNH1ngUDYzOJDWWCTiW5jh6CLhni3Edg"
+#define FIREBASE_PROJECT_ID "apis-uygulama"
+#define USER_EMAIL "apisarge@gmail.com"
+#define USER_PASSWORD "apisapis"
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+
+const char* ssid = "Alpis"; //Wi-fi kullanıcı adı(Telefonun hücresel ağı)
+const char* password = "alpis2196"; //Wi-fi şifre
+int status = WL_IDLE_STATUS;//?
+WiFiClient  client;//?
 
 String izinliler[] =       //İTU kartlarının id'leri uzun oldugu icin string olarak tanımladık
 {
@@ -16,7 +31,9 @@ String izinliler[] =       //İTU kartlarının id'leri uzun oldugu icin string 
   "207481249",    //Baran Ekşi
   "1112245164",   //Göksel Örsçekiç
   "2331689614",   //Murathan Bakır
-  "751118573"     //Ufuk Köksal Yücedağ
+  "751118573",    //Ufuk Köksal Yücedağ
+  "161509318"     //Ömer Tarık Karaca
+
 };
 int sayac = 0;  //ardisik kac kere giris yapıildi bilgisi
 
@@ -30,13 +47,92 @@ Servo myservo;
 String tag;
 String prvtag;
 
+void FirestoreTokenStatusCallback(TokenInfo info){ //!
+  //Serial.printf("Token Info: type = %s, status = %s\n", getTokenType(info).c_str(), getTokenStatus(info).c_str());
+}
+
+void firebaseInit(){
+  config.api_key = API_KEY;
+
+  auth.user.email = USER_EMAIL;
+  auth.user.password = USER_PASSWORD;
+
+  config.token_status_callback = FirestoreTokenStatusCallback; //!
+
+  Firebase.begin(&config, &auth);
+}
+
+void firestoreDataUpdate(String id){
+  if(Firebase.ready()){
+    String documentPath = "atolye/"+id;
+
+    FirebaseJson content;
+
+    content.set("fields/in/stringValue","1");
+    //content.set("fields/humidity/doubleValue", String(humi).c_str());
+
+    /*if(Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "temperature,humidity")){
+      Serial.printf("ok\n%s\n\0n", fbdo.payload().c_str());
+      return;
+    }else{
+      Serial.println(fbdo.errorReason());
+    }*/
+
+    if(Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw())){
+      Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+      return;
+    }else{
+      Serial.println(fbdo.errorReason());
+    }
+  } else{
+    Serial.println("fb not ready");
+  }
+}
+void firestoreDataDelete(String id){
+  if(Firebase.ready()){
+    String documentPath = "atolye/"+id;
+
+    //FirebaseJson content;
+
+    //content.set("fields/in/stringValue","0");
+    //content.set("fields/humidity/doubleValue", String(humi).c_str());
+
+    /*if(Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "temperature,humidity")){
+      Serial.printf("ok\n%s\n\0n", fbdo.payload().c_str());
+      return;
+    }else{
+      Serial.println(fbdo.errorReason());
+    }*/
+
+    if(Firebase.Firestore.deleteDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())){
+      Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+      return;
+    }else{
+      Serial.println(fbdo.errorReason());
+    }
+  } else{
+    Serial.println("fb not ready");
+  }
+}
 void setup()
 {
   Serial.begin(9600);
   SPI.begin();
   rfid.PCD_Init();
   myservo.attach(D0, 500, 2400);
-  myservo.write(0);
+  myservo.write(100);
+  //Wi-fi ya bağlanması
+  WiFi.begin(ssid, password);
+  // Serialportta wi-fi ya bağlanana kadar '.' yazdırıyor
+  while (WiFi.status() != WL_CONNECTED) {
+     delay(500);
+     Serial.print(".");
+  }
+  //Yeni satır oluşturup WiFi connected yazdıktan sonra IP adresini yazdırıyor
+  Serial.println("");
+  Serial.println("WiFi connected");
+  Serial.println(WiFi.localIP());
+  firebaseInit();
 }
 
 void loop() {
@@ -44,7 +140,7 @@ void loop() {
     return;
   if (rfid.PICC_ReadCardSerial())
   {
-    Serial.println("Okunuyor..."+ String(sayac) + " saniye gecti!");
+    Serial.println("Okunuyor..."+ String(sayac/10) + " saniye gecti!");
     for (byte i = 0; i < 4; i++)
     {
       tag += rfid.uid.uidByte[i];
@@ -66,7 +162,10 @@ void loop() {
         Serial.println("Kapi Acildi!");
         Serial.println("----------------------");
         myservo.write(0);
-        delay(1000);
+        rfid.PICC_HaltA();
+        
+        firestoreDataUpdate(tag);
+        //delay(1000);
         break;
         }
       
@@ -79,6 +178,8 @@ void loop() {
           Serial.println("Kapi Kilitlendi!");
           Serial.println("----------------------");
           myservo.write(100);
+          firestoreDataDelete(tag);
+          //delay(1000);
         }
       }
     }
@@ -86,7 +187,7 @@ void loop() {
     {
       if (tag == prvtag)              //kilitlemek icin okunan kartın aynı kart oldugunu kontrol eder
       {
-        if (sayac >= 4)
+        if (sayac >= 40)
         {
           Serial.println("Kapi Kilitlendi!");
           Serial.println("----------------------");
@@ -94,10 +195,12 @@ void loop() {
           sayac = 0;
           prvtag = "p";
           //delay(3000);    //kilitlendikten sonra 3 saniye boyunca okumayacak
-          rfid.PICC_HaltA();  //kilitlendikten sonra kartı çekene kadar okumayacak
+          rfid.PICC_HaltA(); //kilitlendikten sonra kartı çekene kadar okumayacak
+          firestoreDataDelete(tag);
+          //delay(1000);
           }
         sayac += 1;
-        delay(1000);       //sayac 5 olana kadar her saniye test edecek
+        delay(100);       //sayac 5 olana kadar her saniye test edecek
         
         }
       else                 //baska kart okunursa sayac sifirlanir ve kod yeniden baslar
